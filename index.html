@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>인생이라는 미로</title>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; background-color: black; display: flex; justify-content: center; align-items: center; height: 100%; width: 100%; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+        canvas { background-color: black; display: block; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        #timer { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-size: clamp(30px, 5vw, 50px); color: white; font-family: monospace, sans-serif; text-shadow: 2px 2px 4px #000000; }
+        #game-over-screen { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.85); color: white; font-size: clamp(30px, 5vw, 50px); font-family: sans-serif; text-align: center; flex-direction: column; justify-content: center; align-items: center; pointer-events: all; }
+        
+        #gameOverGif {
+            display: none;
+            margin-top: 20px;
+            max-width: 80%;
+            max-height: 50%;
+            border: 2px solid white;
+            border-radius: 10px;
+        }
+
+        #health-container {
+            position: absolute;
+            top: clamp(70px, 12vw, 80px);
+            left: 50%;
+            transform: translateX(-50%);
+            width: 70%;
+            max-width: 600px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #health-label { color: white; font-size: clamp(14px, 2.5vw, 22px); font-family: monospace, sans-serif; margin-right: 10px; text-shadow: 1px 1px 2px black; }
+        #health-bar-container {
+            flex-grow: 1;
+            height: clamp(15px, 3vw, 25px);
+            background-color: #555;
+            border: 2px solid white;
+            border-radius: 5px;
+            box-shadow: 0 0 10px black;
+        }
+        #health-bar { width: 100%; height: 100%; background-color: white; border-radius: 3px; transition: width 0.5s ease-out; }
+        #popup-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: clamp(20px, 3.5vw, 35px);
+            font-weight: bold;
+            text-align: center;
+            text-shadow: 2px 2px 4px black;
+            opacity: 0;
+            transition: opacity 0.5s ease-out;
+            padding: 10px;
+            width: 90%;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui-layer">
+        <div id="timer">10:00</div>
+        <div id="health-container">
+            <span id="health-label">HP</span>
+            <div id="health-bar-container"><div id="health-bar"></div></div>
+        </div>
+        <div id="popup-message"></div>
+    </div>
+    <div id="game-over-screen">
+        <div id="game-over-message"></div>
+        <img id="gameOverGif" src="https://i.postimg.cc/SNnCSbwS/GIF-20250721-041520-199.gif" alt="Game Over Animation">
+    </div>
+
+    <script>
+        (function() {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const timerElement = document.getElementById('timer');
+            const gameOverScreen = document.getElementById('game-over-screen');
+            const gameOverMessage = document.getElementById('game-over-message');
+            const healthBarElement = document.getElementById('health-bar');
+            const popupMessageElement = document.getElementById('popup-message');
+            const gameOverGif = document.getElementById('gameOverGif');
+
+            const MAZE_SIZE = 50;
+            const GAME_DURATION = 600;
+
+            let maze, player, enemies = [], luckStar, cellSize;
+            let startTime, animationFrameId, gameOver = true, popupMessageTimeout;
+
+            function setupAndStartGame() { resizeCanvas(); initGame(); }
+            function resizeCanvas() {
+                const size = Math.min(window.innerWidth, window.innerHeight) * 0.98;
+                canvas.width = size; canvas.height = size;
+                cellSize = canvas.width / 15;
+            }
+            function generateMaze(w, h) {
+                const grid = Array.from({ length: h }, () => Array.from({ length: w }, () => ({ N: true, S: true, E: true, W: true, visited: false })));
+                const stack = []; let current = { x: 0, y: 0 }; grid[0][0].visited = true; let visitedCells = 1;
+                while (visitedCells < w * h) {
+                    const neighbors = []; const { x, y } = current;
+                    if (y > 0 && !grid[y - 1][x].visited) neighbors.push({ x, y: y - 1, dir: 'N' });
+                    if (y < h - 1 && !grid[y + 1][x].visited) neighbors.push({ x, y: y + 1, dir: 'S' });
+                    if (x > 0 && !grid[y][x - 1].visited) neighbors.push({ x: x - 1, y, dir: 'W' });
+                    if (x < w - 1 && !grid[y][x + 1].visited) neighbors.push({ x: x + 1, y, dir: 'E' });
+                    if (neighbors.length > 0) {
+                        const next = neighbors[Math.floor(Math.random() * neighbors.length)];
+                        if (next.dir === 'N') { grid[y][x].N = false; grid[next.y][next.x].S = false; }
+                        if (next.dir === 'S') { grid[y][x].S = false; grid[next.y][next.x].N = false; }
+                        if (next.dir === 'W') { grid[y][x].W = false; grid[next.y][next.x].E = false; }
+                        if (next.dir === 'E') { grid[y][x].E = false; grid[next.y][next.x].W = false; }
+                        stack.push(current); current = { x: next.x, y: next.y }; grid[current.y][current.x].visited = true; visitedCells++;
+                    } else if (stack.length > 0) { current = stack.pop(); }
+                }
+                grid[0][0].W = false; grid[h - 1][w - 1].E = false; grid[h - 1][0].W = false; return grid;
+            }
+            
+            function checkWallCollision(x, y, radius) {
+                const gridX = Math.floor(x / cellSize); const gridY = Math.floor(y / cellSize);
+                if (gridY < 0 || gridY >= MAZE_SIZE || gridX < 0 || gridX >= MAZE_SIZE) return true;
+                const cell = maze[gridY][gridX];
+                if (cell.N && (y - radius) < gridY * cellSize) return true;
+                if (cell.S && (y + radius) > (gridY + 1) * cellSize) return true;
+                if (cell.W && (x - radius) < gridX * cellSize) return true;
+                if (cell.E && (x + radius) > (gridX + 1) * cellSize) return true;
+                return false;
+            }
+
+            const Player = {
+                init() { 
+                    this.x = cellSize / 2; this.y = cellSize / 2; this.radius = cellSize / 3.5; this.isWrinkled = false; this.target = null; 
+                    this.maxHp = 1000; this.hp = this.maxHp;
+                    this.isInvincible = false; this.invincibleTimer = 0;
+                    this.hasLuck = false;
+                },
+                update(elapsed) {
+                    if (!this.hasLuck) {
+                        this.hp -= this.maxHp / (GAME_DURATION * 60);
+                        if (elapsed < 120) { this.speedMultiplier = 7.0; this.color = 'rgb(255, 255, 153)';} 
+                        else if (elapsed < 300) { this.speedMultiplier = 4.0; this.color = 'rgb(60, 179, 113)';} 
+                        else { this.speedMultiplier = 1.0; this.color = 'rgb(139, 69, 19)'; }
+                        if (elapsed > 420) { this.isWrinkled = true; }
+                    }
+                    if (this.hp <= 0) {
+                        this.hp = 0;
+                        endGame("생명력이 다했습니다<br>Your life force has run out");
+                        return;
+                    }
+                    if (this.isInvincible) {
+                        this.invincibleTimer--;
+                        if (this.invincibleTimer <= 0) this.isInvincible = false;
+                    }
+                    if (this.target) {
+                        const worldTargetX = this.x + (this.target.x - canvas.width / 2);
+                        const worldTargetY = this.y + (this.target.y - canvas.height / 2);
+                        const baseSpeed = cellSize * 0.045; const moveSpeed = baseSpeed * this.speedMultiplier;
+                        const dx = worldTargetX - this.x; const dy = worldTargetY - this.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist < moveSpeed) return;
+                        let nextX = this.x + (dx / dist) * moveSpeed;
+                        let nextY = this.y + (dy / dist) * moveSpeed;
+                        const tempX = this.x;
+                        if (!checkWallCollision(nextX, this.y, this.radius)) this.x = nextX;
+                        if (!checkWallCollision(tempX, nextY, this.radius)) this.y = nextY;
+                    }
+                },
+                draw() {
+                    if (this.isInvincible && Math.floor(this.invincibleTimer / 6) % 2 === 0) { return; }
+                    ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2); ctx.fill();
+                    if (this.isWrinkled) {
+                        ctx.fillStyle = 'black'; ctx.beginPath(); ctx.arc(this.x + this.radius * 0.2, this.y - this.radius * 0.3, this.radius * 0.2, 0, Math.PI * 2); ctx.fill();
+                        ctx.beginPath(); ctx.arc(this.x - this.radius * 0.3, this.y + this.radius * 0.1, this.radius * 0.15, 0, Math.PI * 2); ctx.fill();
+                    }
+                },
+                takeDamage(damageType) {
+                    if (this.isInvincible) return;
+                    let messageKo, messageEn;
+                    if (damageType === 'square') {
+                        this.hp /= 2;
+                        messageKo = "당신은 강한 불행을 만나 생명력이 깎였습니다";
+                        messageEn = "You encountered a strong misfortune and your life force was drained.";
+                    } else {
+                        this.hp *= 0.75;
+                        messageKo = "당신은 약한 불행을 만나 생명력이 깎였습니다";
+                        messageEn = "You encountered a weak misfortune and your life force was chipped away.";
+                    }
+                    showPopupMessage(messageKo, messageEn, '#ff4d4d');
+                    this.isInvincible = true;
+                    this.invincibleTimer = 90;
+                }
+            };
+            
+            function findPath(maze, start, end) {
+                const queue = [{ ...start, path: [] }];
+                const visited = new Set([`${start.x},${start.y}`]);
+                const mazeHeight = maze.length; const mazeWidth = maze[0].length;
+                while (queue.length > 0) {
+                    const current = queue.shift();
+                    if (current.x === end.x && current.y === end.y) return current.path;
+                    const { x, y } = current;
+                    if (y < 0 || y >= mazeHeight || x < 0 || x >= mazeWidth) continue;
+                    const cell = maze[y][x]; const neighbors = [];
+                    if (!cell.N && y > 0) neighbors.push({ x, y: y - 1 });
+                    if (!cell.S && y < mazeHeight - 1) neighbors.push({ x, y: y + 1 });
+                    if (!cell.W && x > 0) neighbors.push({ x: x - 1, y });
+                    if (!cell.E && x < mazeWidth - 1) neighbors.push({ x: x + 1, y });
+                    for (const neighbor of neighbors) {
+                        const key = `${neighbor.x},${neighbor.y}`;
+                        if (!visited.has(key)) {
+                            visited.add(key);
+                            queue.push({ ...neighbor, path: [...current.path, neighbor] });
+                        }
+                    }
+                }
+                return []; 
+            }
+
+            class Enemy {
+                constructor(shape, spawnCoords) {
+                    this.shape = shape;
+                    this.size = cellSize * 0.7;
+                    this.path = [];
+                    this.pathUpdateCounter = Math.floor(Math.random() * 60);
+                    this.direction = ['N', 'S', 'E', 'W'][Math.floor(Math.random() * 4)];
+                    
+                    if (this.shape === 'triangle') {
+                        this.speed = cellSize * 0.055; 
+                        this.pathUpdateInterval = 45;
+                    } else { // 'square'
+                        this.speed = cellSize * 0.038; 
+                        this.pathUpdateInterval = 90;
+                    }
+
+                    this.initPosition(spawnCoords);
+                }
+                initPosition(coords) {
+                    this.x = coords.x * cellSize + cellSize / 2;
+                    this.y = coords.y * cellSize + cellSize / 2;
+                }
+                move() {
+                    const playerGridX = Math.floor(player.x / cellSize); const playerGridY = Math.floor(player.y / cellSize);
+                    const gridX = Math.floor(this.x / cellSize); const gridY = Math.floor(this.y / cellSize);
+                    this.pathUpdateCounter++;
+                    if (this.pathUpdateCounter > this.pathUpdateInterval || this.path.length === 0) {
+                        if (gridX !== playerGridX || gridY !== playerGridY) {
+                            this.path = findPath(maze, { x: gridX, y: gridY }, { x: playerGridX, y: playerGridY });
+                        }
+                        this.pathUpdateCounter = 0;
+                    }
+                    let targetX, targetY;
+                    if (this.path.length > 0) {
+                        const nextStep = this.path[0];
+                        targetX = nextStep.x * cellSize + cellSize / 2; targetY = nextStep.y * cellSize + cellSize / 2;
+                        const dx = targetX - this.x; const dy = targetY - this.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist < this.speed) this.path.shift();
+                    } else {
+                        const centerX = gridX * cellSize + cellSize / 2; const centerY = gridY * cellSize + cellSize / 2;
+                        const isAtCenter = Math.abs(this.x - centerX) < this.speed && Math.abs(this.y - centerY) < this.speed;
+                        if (isAtCenter) {
+                            this.x = centerX; this.y = centerY;
+                            const cell = (maze[gridY] && maze[gridY][gridX]) ? maze[gridY][gridX] : null;
+                            if (!cell) { this.initPosition({x: gridX, y: gridY}); return; }
+                            let possible = [];
+                            if (!cell.N) possible.push('N'); if (!cell.S) possible.push('S');
+                            if (!cell.W) possible.push('W'); if (!cell.E) possible.push('E');
+                            const opposite = { 'N': 'S', 'S': 'N', 'W': 'E', 'E': 'W' }[this.direction];
+                            if (possible.length > 1 && possible.includes(opposite)) possible.splice(possible.indexOf(opposite), 1);
+                            if (possible.length > 0) this.direction = possible[Math.floor(Math.random() * possible.length)];
+                        }
+                    }
+                    if (targetX !== undefined && targetY !== undefined) {
+                        const moveDx = targetX - this.x; const moveDy = targetY - this.y;
+                        const moveDist = Math.sqrt(moveDx * moveDx + moveDy * moveDy);
+                        if (moveDist > 1) {
+                            this.x += (moveDx / moveDist) * this.speed; this.y += (moveDy / moveDist) * this.speed;
+                        }
+                    } else { 
+                        if (this.direction === 'N') this.y -= this.speed; else if (this.direction === 'S') this.y += this.speed;
+                        else if (this.direction === 'W') this.x -= this.speed; else if (this.direction === 'E') this.x += this.speed;
+                    }
+                }
+                draw() {
+                    ctx.fillStyle = 'rgb(220, 20, 60)';
+                    if (this.shape === 'triangle') {
+                        ctx.beginPath(); ctx.moveTo(this.x, this.y - this.size / 2); ctx.lineTo(this.x - this.size / 2, this.y + this.size / 2); ctx.lineTo(this.x + this.size / 2, this.y + this.size / 2); ctx.closePath(); ctx.fill();
+                    } else { ctx.fillRect(this.x - this.size / 2, this.y - this.size / 2, this.size, this.size); }
+                }
+            }
+
+            class LuckStar {
+                constructor() {
+                    this.size = cellSize / 2;
+                    this.isActive = true;
+                    this.placeRandomly();
+                }
+                placeRandomly() {
+                    let randX, randY;
+                    do {
+                        randX = Math.floor(Math.random() * (MAZE_SIZE - 2)) + 1;
+                        randY = Math.floor(Math.random() * (MAZE_SIZE - 2)) + 1;
+                    } while (randX < 5 && randY < 5);
+                    this.x = randX * cellSize + cellSize / 2;
+                    this.y = randY * cellSize + cellSize / 2;
+                }
+                draw() {
+                    if (!this.isActive) return;
+                    ctx.fillStyle = '#FFD700'; ctx.strokeStyle = '#FFA500';
+                    ctx.lineWidth = 2; ctx.beginPath();
+                    let rot = Math.PI / 2 * 3;
+                    let outerRadius = this.size; let innerRadius = this.size / 2;
+                    let step = Math.PI / 5;
+                    ctx.moveTo(this.x, this.y - outerRadius);
+                    for (let i = 0; i < 5; i++) {
+                        ctx.lineTo(this.x + Math.cos(rot) * outerRadius, this.y + Math.sin(rot) * outerRadius);
+                        rot += step;
+                        ctx.lineTo(this.x + Math.cos(rot) * innerRadius, this.y + Math.sin(rot) * innerRadius);
+                        rot += step;
+                    }
+                    ctx.lineTo(this.x, this.y - outerRadius);
+                    ctx.closePath(); ctx.fill(); ctx.stroke();
+                }
+            }
+
+            function drawMaze() {
+                const screenCenterX = player.x; const screenCenterY = player.y;
+                const viewWidth = canvas.width; const viewHeight = canvas.height;
+                const startX = Math.max(0, Math.floor((screenCenterX - viewWidth / 2) / cellSize) - 1);
+                const startY = Math.max(0, Math.floor((screenCenterY - viewHeight / 2) / cellSize) - 1);
+                const endX = Math.min(MAZE_SIZE, Math.ceil((screenCenterX + viewWidth / 2) / cellSize) + 1);
+                const endY = Math.min(MAZE_SIZE, Math.ceil((screenCenterY + viewHeight / 2) / cellSize) + 1);
+                ctx.fillStyle = 'rgba(173, 216, 230, 0.4)';
+                ctx.fillRect((MAZE_SIZE - 1) * cellSize, (MAZE_SIZE - 1) * cellSize, cellSize, cellSize);
+                ctx.fillRect(0, (MAZE_SIZE - 1) * cellSize, cellSize, cellSize);
+                ctx.fillStyle = 'white';
+                ctx.font = `${cellSize * 0.4}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText('출구', (MAZE_SIZE - 0.5) * cellSize, (MAZE_SIZE - 0.5) * cellSize);
+                ctx.fillText('출구', 0.5 * cellSize, (MAZE_SIZE - 0.5) * cellSize);
+                ctx.strokeStyle = 'white'; ctx.lineWidth = Math.max(1, cellSize/12); ctx.lineCap = 'square';
+                for (let y = startY; y < endY; y++) {
+                    for (let x = startX; x < endX; x++) {
+                        const cell = maze[y][x]; const px = x * cellSize, py = y * cellSize;
+                        if (cell.N) { ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + cellSize, py); ctx.stroke(); }
+                        if (cell.S) { ctx.beginPath(); ctx.moveTo(px, py + cellSize); ctx.lineTo(px + cellSize, py + cellSize); ctx.stroke(); }
+                        if (cell.E) { ctx.beginPath(); ctx.moveTo(px + cellSize, py); ctx.lineTo(px + cellSize, py + cellSize); ctx.stroke(); }
+                        if (cell.W) { ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py + cellSize); ctx.stroke(); }
+                    }
+                }
+            }
+            
+            function showPopupMessage(koreanText, englishText, color) {
+                clearTimeout(popupMessageTimeout);
+                popupMessageElement.innerHTML = `${koreanText}<br><span style="font-size: 0.8em;">${englishText}</span>`;
+                popupMessageElement.style.color = color;
+                popupMessageElement.style.opacity = 1;
+                popupMessageTimeout = setTimeout(() => { popupMessageElement.style.opacity = 0; }, 3000);
+            }
+
+            function gameLoop() {
+                if (gameOver) return;
+                animationFrameId = requestAnimationFrame(gameLoop);
+                const now = Date.now(); const elapsed = (now - startTime) / 1000;
+                
+                player.update(elapsed);
+                if(gameOver) return;
+
+                const timeIsUp = elapsed >= GAME_DURATION;
+                if (timeIsUp && !player.hasLuck) { 
+                    endGame("시간 초과<br>Time Over"); 
+                    return; 
+                }
+                const remaining = timeIsUp ? 0 : GAME_DURATION - elapsed;
+                const minutes = Math.floor(remaining / 60); const seconds = Math.floor(remaining % 60);
+                timerElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'black';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.save();
+                ctx.translate(canvas.width / 2 - player.x, canvas.height / 2 - player.y);
+
+                drawMaze();
+                luckStar.draw();
+                player.draw();
+                
+                enemies.forEach(enemy => {
+                    enemy.move(); enemy.draw();
+                    const dx = player.x - enemy.x, dy = player.y - enemy.y; const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist < player.radius + enemy.size / 2.5) {
+                        player.takeDamage(enemy.shape);
+                        if (dist > 0) {
+                            enemy.x -= (dx / dist) * cellSize * 0.5;
+                            enemy.y -= (dy / dist) * cellSize * 0.5;
+                        }
+                    }
+                });
+
+                if (luckStar.isActive) {
+                    const dx = player.x - luckStar.x; const dy = player.y - luckStar.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < player.radius + luckStar.size) {
+                        luckStar.isActive = false;
+                        player.hasLuck = true;
+                        player.hp = player.maxHp;
+                        player.speedMultiplier = 7.0;
+                        player.color = 'rgb(255, 255, 153)';
+                        player.isWrinkled = false;
+                        showPopupMessage(
+                            "당신은 일생일대의 행운을 만났습니다",
+                            "You have met the luck of a lifetime!",
+                            '#FFD700'
+                        );
+                    }
+                }
+
+                ctx.restore();
+
+                healthBarElement.style.width = (player.hp / player.maxHp) * 100 + '%';
+
+                const playerGridX = Math.floor(player.x / cellSize); const playerGridY = Math.floor(player.y / cellSize);
+                if ((playerGridX === MAZE_SIZE - 1 && playerGridY === MAZE_SIZE - 1) || (playerGridX === 0 && playerGridY === MAZE_SIZE - 1)) {
+                    endGame("탈출 성공!<br>Escape Success!"); return;
+                }
+            }
+
+            function endGame(message) {
+                if (gameOver) return;
+                gameOver = true;
+                cancelAnimationFrame(animationFrameId);
+
+                const isDeath = message.includes("생명력이 다했습니다") || message.includes("시간 초과");
+
+                if (isDeath) {
+                    gameOverMessage.innerHTML = "당신은 죽었습니다<br><span style='font-size:0.7em'>You have died</span>";
+                    
+                    setTimeout(() => {
+                        gameOverGif.style.display = 'block';
+                        gameOverMessage.innerHTML += "<br><br><span style='font-size:0.5em; line-height: 1.5;'>화면을 클릭하여 다시 시작하세요<br>Click the screen to restart</span>";
+                    }, 1500);
+
+                } else {
+                    gameOverMessage.innerHTML = message;
+                }
+                
+                gameOverScreen.style.display = 'flex';
+            }
+
+            function handleInteraction(e) {
+                if (gameOver) { initGame(); return; }
+                e.preventDefault();
+                const rect = canvas.getBoundingClientRect(); const touch = e.touches ? e.touches[0] : e;
+                player.target = { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+            }
+
+            function initGame() {
+                if(animationFrameId) cancelAnimationFrame(animationFrameId);
+                maze = generateMaze(MAZE_SIZE, MAZE_SIZE);
+                player = Player; player.init();
+                luckStar = new LuckStar();
+                
+                enemies = [];
+                // === 변경점: 요청하신대로 약한 불행(triangle) 2마리, 강한 불행(square) 1마리로 수정 ===
+                const enemyCounts = { triangle: 2, square: 1 };
+                const usedCoords = new Set();
+
+                for (const shape in enemyCounts) {
+                    for (let i = 0; i < enemyCounts[shape]; i++) {
+                        let randX, randY, key;
+                        do {
+                            randX = Math.floor(Math.random() * (MAZE_SIZE - 4)) + 2;
+                            randY = Math.floor(Math.random() * (MAZE_SIZE - 4)) + 2;
+                            key = `${randX},${randY}`;
+                        } while ((randX < 5 && randY < 5) || usedCoords.has(key));
+                        usedCoords.add(key);
+                        enemies.push(new Enemy(shape, {x: randX, y: randY}));
+                    }
+                }
+
+                startTime = Date.now(); gameOver = false;
+                gameOverScreen.style.display = 'none';
+                gameOverGif.style.display = 'none';
+                popupMessageElement.style.opacity = 0;
+                clearTimeout(popupMessageTimeout);
+                gameLoop();
+            }
+            window.addEventListener('resize', () => { resizeCanvas(); initGame(); });
+            canvas.addEventListener('mousedown', handleInteraction);
+            canvas.addEventListener('touchstart', handleInteraction, { passive: false });
+            canvas.addEventListener('touchmove', handleInteraction, { passive: false });
+            gameOverScreen.addEventListener('click', initGame);
+
+            setupAndStartGame();
+        })();
+    </script>
+</body>
+</html>
